@@ -45,6 +45,11 @@ const PLATFORM_LABELS: Record<PlatformId, string> = {
   amazon: "Amazon.in",
 };
 
+// V2 decision: auto-pick the cheapest match and don't surface "which product?" options. `chooseQuote`
+// already selects the best-value (cheapest per-unit, in-stock) quote, so we simply hide the picker.
+// Typed `boolean` (not the literal `false`) so the picker code stays reachable/type-checked.
+const SHOW_PRODUCT_PICKER = false as boolean;
+
 /** The runtime `canonicalItemId` the backend stamps on each item (the TS type omits it). */
 function itemCanonicalId(item: RequestedItem): string {
   const maybe = (item as { canonicalItemId?: unknown }).canonicalItemId;
@@ -247,6 +252,7 @@ export function ComparisonPage({
    */
   const renderProductPicker = useCallback(
     (item: RequestedItem, canonicalItemId: string): JSX.Element | null => {
+      if (!SHOW_PRODUCT_PICKER) return null; // V2: auto-pick cheapest, no options shown
       const candidates = state.candidatesByItem[canonicalItemId] ?? [];
       const selectedQuote = selectedQuoteFor(canonicalItemId);
       const ambiguous = isAmbiguousItem(candidates);

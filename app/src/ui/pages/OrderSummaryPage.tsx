@@ -6,6 +6,7 @@
 import { IonButton, IonContent, IonFooter, IonNote, IonPage } from "@ionic/react";
 import type { OrderAttempt, PlatformId } from "../../core/domain/types";
 import { formatRupees, SUPPORTED_PLATFORMS } from "../../core/domain/types";
+import { clearLastRun } from "../../core/checkout/lastRun";
 import { OrderReceiptCard } from "../components/OrderReceiptCard";
 import { BrandHeader } from "../components/BrandHeader";
 
@@ -66,6 +67,8 @@ export function OrderSummaryPage({
   const stagedTotalPaise = staged.reduce((sum, a) => sum + a.totalPaise, 0);
 
   const startNewOrder = (): void => {
+    // Drop the persisted run summary first — otherwise the reload restores this screen instead of chat.
+    clearLastRun();
     window.location.assign("/");
   };
 
@@ -109,7 +112,8 @@ export function OrderSummaryPage({
                   <h2 className="pc-handoff-card__platform">{platformLabel(attempt.platform)}</h2>
                   <p className="pc-handoff-card__prompt">
                     {attempt.stagedLineCount ?? 0} item
-                    {(attempt.stagedLineCount ?? 0) === 1 ? "" : "s"} added · approx{" "}
+                    {(attempt.stagedLineCount ?? 0) === 1 ? "" : "s"} added
+                    {attempt.nativeApp ? " to your Hyperpure app cart" : ""} · approx{" "}
                     {formatRupees(attempt.totalPaise)}
                   </p>
 
@@ -145,10 +149,12 @@ export function OrderSummaryPage({
                     className="pc-cta"
                     expand="block"
                     data-testid={`review-${attempt.platform}`}
-                    disabled={!attempt.cartUrl || !onOpenCart}
+                    disabled={(!attempt.cartUrl && !attempt.nativeApp) || !onOpenCart}
                     onClick={() => onOpenCart?.(attempt.platform)}
                   >
-                    Review &amp; checkout on {platformLabel(attempt.platform)}
+                    {attempt.nativeApp
+                      ? `Open ${platformLabel(attempt.platform)} to check out`
+                      : `Review & checkout on ${platformLabel(attempt.platform)}`}
                   </IonButton>
                 </div>
               );

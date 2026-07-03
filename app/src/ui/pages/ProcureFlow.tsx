@@ -23,8 +23,12 @@ import type { AutomationEngine } from "../../core/automation/AutomationEngine";
 import { MockAutomationEngine } from "../../core/automation/__mocks__/MockAutomationEngine";
 import { createEngine } from "../../core/adapters";
 import { CheckoutDriver } from "../../core/checkout/CheckoutDriver";
+import { clearLastRun, loadLastRun, saveLastRun } from "../../core/checkout/lastRun";
 import { IdempotencyStore } from "../../core/checkout/idempotency";
 import { agentForEngine } from "../../core/agents/AgentRegistry";
+import { HyperpureNative } from "../../core/native/hyperpureNative";
+import { nativeQuoteRead } from "../../core/native/nativeSource";
+import { searchQueryFor } from "../../core/adapters/playbooks/common";
 import { DefaultKnowledgeStore } from "../../core/knowledge/PlatformKnowledgeStore";
 import { BackendFailureReporter } from "../../core/knowledge/failureReporter";
 import { SiteMemory } from "../../core/knowledge/siteMemory";
@@ -271,6 +275,8 @@ export function ProcureFlow(props: ProcureFlowProps = {}): JSX.Element {
   const [pendingHitl, setPendingHitl] = useState<PendingHitl | null>(null);
   const [revealed, setRevealed] = useState(false);
   const [attempts, setAttempts] = useState<OrderAttempt[]>([]);
+  // Summary restored after a WebView reload (see LAST_RUN_KEY) — shown while the session is idle.
+  const [restoredAttempts, setRestoredAttempts] = useState<OrderAttempt[] | null>(() => loadLastRun());
   const [busyMessage, setBusyMessage] = useState<string | null>(null);
   // First-run sign-in gate: the user must manually log in to each active platform once (persisted in
   // localStorage). Demo mode skips it (no real sites). Until ready, the chat is gated behind LoginGate.
@@ -279,6 +285,26 @@ export function ProcureFlow(props: ProcureFlowProps = {}): JSX.Element {
   );
 
   const state = useSyncExternalStore(orchestrator.subscribe, orchestrator.getState);
+
+  // V2: the native Hyperpure app is already signed in, so when its accessibility reader is enabled and
+  // Hyperpure is the only active platform, skip the WebView sign-in gate entirely (no login web view).
+  useEffect(() => {
+    if (isDemo || loginReady) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { enabled } = await HyperpureNative.isEnabled();
+        if (!cancelled && enabled && QUOTE_PLATFORMS.every((p) => p === "hyperpure")) {
+          setLoginReady(true);
+        }
+      } catch {
+        /* plugin unavailable (web) — keep the gate */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isDemo, loginReady]);
 
   const bridge = useCallback((): InAppBrowserBridge => {
     if (bridgeRef.current === null) {
@@ -345,6 +371,9 @@ export function ProcureFlow(props: ProcureFlowProps = {}): JSX.Element {
   // ---- Phase 1: parse confirmed → collect quotes on each platform → optimize ----
   const startProcurement = useCallback(
     async (items: readonly RequestedItem[]) => {
+      // A fresh order replaces the previous run's restored summary.
+      clearLastRun();
+      setRestoredAttempts(null);
       const request = {
         id: crypto.randomUUID(),
         items,
@@ -358,9 +387,47 @@ export function ProcureFlow(props: ProcureFlowProps = {}): JSX.Element {
       const showWebView = isAutomationDebug();
       const br = bridge();
 
+      // V2: if the native Hyperpure-reader accessibility service is enabled, source Hyperpure from the
+      // installed APP (com.wotu.app) — not the WebView. Prices come back as text (no vision). Detected
+      // once; falls back to the WebView when off / on web / in demo.
+      let nativeHyperpure = false;
+      if (!isDemo) {
+        try {
+          nativeHyperpure = (await HyperpureNative.isEnabled()).enabled;
+        } catch {
+          nativeHyperpure = false;
+        }
+      }
+
       let quotesCollected = 0;
       for (const platform of QUOTE_PLATFORMS) {
         try {
+          if (platform === "hyperpure" && nativeHyperpure) {
+            traceAutomation("info", "sourcing from the NATIVE Hyperpure app (accessibility) — no web view", platform);
+            for (const item of orchestrator.getState().items) {
+              try {
+                const query = searchQueryFor(item) || item.name;
+                const res = await HyperpureNative.search({ query });
+                const { chosen, candidates } = nativeQuoteRead(item, res.products ?? []);
+                orchestrator.recordQuote(chosen);
+                orchestrator.recordCandidates(chosen.canonicalItemId, candidates);
+                quotesCollected += 1;
+                traceAutomation(
+                  "info",
+                  `✓ (native app) "${item.name}" → ₹${(chosen.pricePaise / 100).toFixed(2)} (${candidates.length} candidate(s))`,
+                  platform,
+                );
+              } catch (err) {
+                traceAutomation(
+                  "error",
+                  `✗ (native app) "${item.name}": ${err instanceof Error ? err.message : String(err)}`,
+                  platform,
+                );
+              }
+            }
+            continue;
+          }
+
           const engine = engineFor(platform);
           traceAutomation("think", `opening ${PLATFORM_URLS[platform]}`, platform);
           await engine.open(PLATFORM_URLS[platform], { hidden: !showWebView });
@@ -457,6 +524,15 @@ export function ProcureFlow(props: ProcureFlowProps = {}): JSX.Element {
           );
         }
       }
+      // V2: native sourcing drives the Hyperpure app to the foreground; pull our app back so the user
+      // lands on the comparison instead of being stranded in Hyperpure after the prices are read.
+      if (nativeHyperpure) {
+        try {
+          await HyperpureNative.bringToFront();
+        } catch {
+          /* best-effort */
+        }
+      }
       traceAutomation(
         quotesCollected > 0 ? "info" : "warn",
         `collected ${quotesCollected} quote(s) across ${QUOTE_PLATFORMS.length} platform(s)`,
@@ -470,7 +546,7 @@ export function ProcureFlow(props: ProcureFlowProps = {}): JSX.Element {
       traceAutomation("think", "optimization complete");
       setBusyMessage(null);
     },
-    [engineFor, orchestrator, knowledgeStore, memoryFor],
+    [engineFor, orchestrator, knowledgeStore, memoryFor, isDemo],
   );
 
   // ---- Phase 2 (after explicit approval): drive checkout per platform ----
@@ -506,8 +582,71 @@ export function ProcureFlow(props: ProcureFlowProps = {}): JSX.Element {
     // page as their items are added to the cart (an honest "adding to your cart" moment), then it closes.
     const showWebView = true;
     const collected: OrderAttempt[] = [];
+
+    // V2: when the Hyperpure-reader accessibility service is on, ADD TO CART inside the native app
+    // (com.wotu.app) too — not just the pricing read. The whole loop (search → add → checkout) then
+    // happens in the real app; the user reviews + pays in Hyperpure. Falls back to the WebView when off.
+    let nativeHyperpure = false;
+    try {
+      nativeHyperpure = (await HyperpureNative.isEnabled()).enabled;
+    } catch {
+      nativeHyperpure = false;
+    }
+
     for (const platformAllocation of allocation.perPlatform) {
       if (platformAllocation.lines.length === 0) {
+        continue;
+      }
+      if (platformAllocation.platform === "hyperpure" && nativeHyperpure) {
+        const items = orchestrator.getState().items;
+        const titleByItem = new Map<string, string>();
+        for (const q of orchestrator.getState().quotes) {
+          if (q.platform === "hyperpure") titleByItem.set(q.canonicalItemId, q.title);
+        }
+        let added = 0;
+        traceAutomation("info", "adding to cart in the NATIVE Hyperpure app (accessibility) — no web view", "hyperpure");
+        for (const line of platformAllocation.lines) {
+          try {
+            const item = items.find(
+              (i) => ((i as { canonicalItemId?: string }).canonicalItemId ?? i.name) === line.canonicalItemId,
+            );
+            const query = (item ? searchQueryFor(item) : "") || line.itemName;
+            const title = titleByItem.get(line.canonicalItemId) ?? line.itemName;
+            const res = await HyperpureNative.addToCart({ query, title, qty: line.qty });
+            added += res.added ?? 0;
+            traceAutomation("info", `✓ added "${title}" ×${res.added ?? 0} to the Hyperpure cart`, "hyperpure");
+          } catch (err) {
+            traceAutomation(
+              "error",
+              `✗ could not add "${line.itemName}": ${err instanceof Error ? err.message : String(err)}`,
+              "hyperpure",
+            );
+          }
+        }
+        // Items are staged — come BACK to our summary screen (the user chooses there: "Open Hyperpure
+        // to check out" jumps straight to the Hyperpure cart, or they start a new order).
+        try {
+          await HyperpureNative.bringToFront();
+          traceAutomation("info", "items staged in the Hyperpure cart — returning to the summary", "hyperpure");
+        } catch (err) {
+          traceAutomation(
+            "warn",
+            `couldn't return to the app automatically: ${err instanceof Error ? err.message : String(err)}`,
+            "hyperpure",
+          );
+        }
+        const nowIso = new Date().toISOString();
+        collected.push({
+          platform: "hyperpure",
+          status: "cart_filled",
+          totalPaise: platformAllocation.totalPaise,
+          paidOnCredit: false,
+          idempotencyKey: `native-hp-${nowIso}`,
+          startedAt: nowIso,
+          updatedAt: nowIso,
+          stagedLineCount: added,
+          nativeApp: true,
+        });
         continue;
       }
       // Detail-page URLs captured while pricing this platform, so checkout re-opens the exact product
@@ -574,6 +713,7 @@ export function ProcureFlow(props: ProcureFlowProps = {}): JSX.Element {
       }
     }
     setAttempts(collected);
+    saveLastRun(collected); // survive a WebView reload while Hyperpure is foregrounded
     setPendingHitl(null);
     // Staging emits no OrderPlaced, so explicitly move the session to its terminal success state and
     // render the summary (with the per-platform "Review & checkout" hand-off).
@@ -584,6 +724,18 @@ export function ProcureFlow(props: ProcureFlowProps = {}): JSX.Element {
   // quantities/variants and complete checkout manually. Re-opens the cart URL fresh and shows it.
   const openCartForReview = useCallback(
     async (platform: PlatformId): Promise<void> => {
+      // V2: if this platform's cart was filled in its NATIVE app, hand off by re-opening THAT app
+      // (foreground Hyperpure on its cart) instead of the WebView cart URL.
+      if (platform === "hyperpure") {
+        try {
+          if ((await HyperpureNative.isEnabled()).enabled) {
+            await HyperpureNative.openCart();
+            return;
+          }
+        } catch {
+          /* fall through to the WebView cart */
+        }
+      }
       const url = PLATFORM_CART_URLS[platform];
       try {
         const engine = engineFor(platform);
@@ -749,6 +901,17 @@ export function ProcureFlow(props: ProcureFlowProps = {}): JSX.Element {
       );
     case "idle":
     default:
+      // A WebView reload during staging loses the in-memory session; if the last run's summary was
+      // persisted (fresh), land the user back on it — "Open Hyperpure to check out" / new order.
+      if (restoredAttempts && restoredAttempts.length > 0) {
+        return (
+          <OrderSummaryPage
+            attempts={restoredAttempts}
+            onOpenCart={(platform) => void openCartForReview(platform)}
+            onOpenProduct={(platform, url) => void openProductForAdd(platform, url)}
+          />
+        );
+      }
       return (
         <ChatPage
           intentClient={intentClient}

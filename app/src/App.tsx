@@ -2,6 +2,7 @@ import { IonApp, IonRouterOutlet, setupIonicReact } from "@ionic/react";
 import { IonReactRouter } from "@ionic/react-router";
 import { Redirect, Route } from "react-router-dom";
 import { ChatPage } from "./ui/pages/ChatPage";
+import { NativeSearchPage } from "./ui/pages/NativeSearchPage";
 import { ProcureFlow } from "./ui/pages/ProcureFlow";
 
 setupIonicReact();
@@ -18,6 +19,7 @@ export function App() {
         <IonRouterOutlet>
           <Route exact path="/flow" component={ProcureFlow} />
           <Route exact path="/chat" component={ChatPage} />
+          <Route exact path="/native" component={NativeSearchPage} />
           <Route exact path="/">
             <Redirect to="/flow" />
           </Route>

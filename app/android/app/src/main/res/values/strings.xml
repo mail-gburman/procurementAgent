@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Procure Copilot</string>
+    <string name="title_activity_main">Procure Copilot</string>
+    <string name="package_name">ai.procurecopilot.app</string>
+    <string name="custom_url_scheme">ai.procurecopilot.app</string>
+    <string name="hp_a11y_desc">Lets Procure Copilot read product prices directly from the Hyperpure app (native source, V2) instead of a web view.</string>
+</resources>

@@ -173,6 +173,12 @@ export interface OrderAttempt {
   /** Number of approved lines successfully added to this platform's cart (for the summary copy). */
   readonly stagedLineCount?: number;
   /**
+   * True when the cart was filled inside the platform's NATIVE app (V2 Hyperpure accessibility flow)
+   * rather than the WebView. The summary then hands off by re-opening that app (no cart URL) so the
+   * user reviews + checks out in the real app.
+   */
+  readonly nativeApp?: boolean;
+  /**
    * Per-line outcome of the cart-staging hand-off: which approved items the agent actually added vs.
    * which it couldn't add automatically (so the summary can hand the user a direct product link to add
    * those manually — the model the user asked for). Set on `cart_filled` attempts.
