@@ -194,6 +194,6 @@ describe("agentFor", () => {
 
     const result = await agent.addToCart({ skuId: "HP-PANEER-1KG", qty: 1, productUrl, item });
     expect(result.status).toBe("added");
-    expect(result.cartUrl).toBe("https://www.hyperpure.com/in/cart");
+    expect(result.cartUrl).toBe("https://www.hyperpure.com/buyer/cart");
   });
 });

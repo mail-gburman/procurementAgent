@@ -192,7 +192,7 @@ describe("ComparisonPage", () => {
     await waitFor(() => expect(optimize).toHaveBeenCalledTimes(2));
   });
 
-  it("offers the nearby-SKU picker for an approximate default and selecting a SKU re-optimizes", async () => {
+  it("V2: auto-picks for an approximate default — no nearby-SKU picker is surfaced", async () => {
     const optimize = vi
       .fn()
       .mockResolvedValueOnce(allocation(42000))
@@ -227,17 +227,14 @@ describe("ComparisonPage", () => {
 
     render(<ComparisonPage orchestrator={orch} />);
 
-    // The subtle approximate-match toggle is shown (collapsed); expand it to reveal candidate SKUs.
-    const toggle = screen.getByTestId("picker-toggle-potato");
-    expect(toggle).toHaveTextContent("Approximate match");
-    fireEvent.click(toggle);
-
-    // Selecting the alternate SKU dispatches a select-sku modify (re-optimizes).
-    fireEvent.click(screen.getByTestId("candidate-potato-mm-500g"));
-    await waitFor(() => expect(optimize).toHaveBeenCalledTimes(2));
+    // V2 decision (SHOW_PRODUCT_PICKER=false): no picker is surfaced — the cheapest/best-value match
+    // is auto-picked and the user proceeds without a "which product?" prompt.
+    expect(screen.queryByTestId("picker-toggle-potato")).toBeNull();
+    expect(screen.queryByTestId("picker-potato")).toBeNull();
+    expect(optimize).toHaveBeenCalledTimes(1);
   });
 
-  it("prominently asks the user to pick when a query is AMBIGUOUS (different products), open by default", async () => {
+  it("V2: auto-picks the cheapest even when a query is AMBIGUOUS — no picker is surfaced", async () => {
     const optimize = vi
       .fn()
       .mockResolvedValueOnce(allocation(31400))
@@ -266,12 +263,11 @@ describe("ComparisonPage", () => {
 
     render(<ComparisonPage orchestrator={orch} />);
 
-    // Ambiguous → prominent header, and it's OPEN by default (no toggle click needed).
-    const picker = screen.getByTestId("picker-potato");
-    expect(picker).toHaveAttribute("data-ambiguous", "true");
-    expect(screen.getByTestId("picker-toggle-potato")).toHaveTextContent("Multiple products match");
-    fireEvent.click(screen.getByTestId("candidate-potato-curry-1kg"));
-    await waitFor(() => expect(optimize).toHaveBeenCalledTimes(2));
+    // V2 decision (SHOW_PRODUCT_PICKER=false): even for an ambiguous query no picker is surfaced —
+    // the cheapest/best-value match is auto-picked (chooseQuote) and the flow continues silently.
+    expect(screen.queryByTestId("picker-potato")).toBeNull();
+    expect(screen.queryByTestId("picker-toggle-potato")).toBeNull();
+    expect(optimize).toHaveBeenCalledTimes(1);
   });
 
   it("does NOT show the nearby-SKU picker when the default is an exact match", async () => {

@@ -80,8 +80,12 @@ export class Orchestrator implements ReadableStore<SessionState> {
 
   /** Begin a session: ensure a durable session id, then record start + plan. */
   async start(request: ProcurementRequest): Promise<void> {
+    // Standalone: when the backend host is off the network, skip its calls outright (quick ~2.5s
+    // probe) instead of letting createSession/plan each wait out a long transport timeout first.
+    const reachable = (await this.backend.isReachable?.().catch(() => false)) !== false;
     if (this.sessionId === "") {
       try {
+        if (!reachable) throw new Error("backend unreachable");
         const session = await this.backend.createSession(request);
         this.sessionId = session.id;
       } catch {
@@ -96,6 +100,7 @@ export class Orchestrator implements ReadableStore<SessionState> {
 
     let items = request.items;
     try {
+      if (!reachable) throw new Error("backend unreachable");
       const plan = await this.backend.plan({
         requestText: request.items.map((i) => i.raw).join("; "),
         items: request.items,

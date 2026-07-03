@@ -14,6 +14,7 @@ import type {
   RequestedItem,
 } from "../domain/types";
 import { formatRupees } from "../domain/types";
+import { localOptimize } from "./localOptimize";
 
 /** Per-platform constraints fed to the optimizer (MOV, delivery fee, optional credit). */
 export interface PlatformConstraint {
@@ -36,14 +37,27 @@ export interface OptimizeOptions {
 export class OptimizerClient {
   constructor(private readonly backend: BackendClient) {}
 
-  /** Build the request, call the backend optimizer, and return the explainable allocation. */
+  /**
+   * Build the request, call the backend optimizer, and return the explainable allocation.
+   *
+   * Standalone fallback: when the backend is unreachable (quick probe) or the solve fails, the
+   * allocation is computed ON-DEVICE by {@link localOptimize} — same contract, greedy best-quote per
+   * item — so the APK keeps working with no Mac on the WiFi (exact for the single-platform V2 case).
+   */
   async optimize(
     items: readonly RequestedItem[],
     quotes: readonly Quote[],
     options: OptimizeOptions = {},
   ): Promise<Allocation> {
     const request = this.buildRequest(items, quotes, options);
-    return this.backend.optimize(request);
+    try {
+      if ((await this.backend.isReachable?.()) === false) {
+        return localOptimize(request);
+      }
+      return await this.backend.optimize(request);
+    } catch {
+      return localOptimize(request);
+    }
   }
 
   /** Pure assembly of the {@link OptimizeRequest} (separated out so it can be asserted in tests). */

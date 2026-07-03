@@ -98,7 +98,9 @@ describe("ChatPage", () => {
     const { client } = makeIntentClient(async () => ({ items: [], confidence: 0.9 }));
     render(<ChatPage intentClient={client} />);
 
-    typeOrder("blah blah");
+    // Symbols only: the LLM returns no items AND the on-device fallback parser can't extract a
+    // name either (a wordy input like "blah blah" is now picked up by the local parser by design).
+    typeOrder("??? !!!");
     fireEvent.click(screen.getByTestId("send-button"));
 
     await waitFor(() => expect(screen.getByTestId("status-note")).toBeInTheDocument());

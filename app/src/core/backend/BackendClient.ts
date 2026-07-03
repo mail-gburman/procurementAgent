@@ -152,6 +152,12 @@ export interface OptimizeRequest {
 }
 
 export interface BackendClient {
+  /**
+   * Quick health probe (~2.5s) of the backend. Callers that have an on-device fallback (intent
+   * parsing, the optimizer) check this first so a dead backend fails over in seconds instead of
+   * hanging for the full request timeout — the standalone-APK path (no Mac on the network).
+   */
+  isReachable?(): Promise<boolean>;
   intent(req: IntentRequest): Promise<IntentResponse>;
   plan(req: PlanRequest): Promise<PlanResponse>;
   nextAction(req: NextActionRequest): Promise<EngineAction>;
@@ -283,6 +289,20 @@ export class HttpBackendClient implements BackendClient {
   /** Drop the cached choice on a transport failure so the next call re-probes (e.g. tunnel dropped). */
   private onTransportError(): void {
     if (this.candidates.length > 1) this.resolved = undefined;
+  }
+
+  /**
+   * Quick (~2.5s) health probe of the resolved base. Lets callers with an on-device fallback (intent
+   * parser, optimizer) bail out fast when the backend host is off the network — the standalone-APK
+   * case — instead of waiting out the full 45s request timeout on a dead LAN address.
+   */
+  async isReachable(): Promise<boolean> {
+    try {
+      const base = await this.resolveBase();
+      return await this.probeImpl(base);
+    } catch {
+      return false;
+    }
   }
 
   private async post<T>(path: string, body: unknown): Promise<T> {
